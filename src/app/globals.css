@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+@theme {
+  /* ------------------------------------------------------------------
+   * Evergreen — structure. Headers, dark sections, icon tiles, links.
+   * Pushed deeper at both ends than before so dark bands read as near-black
+   * and the mid greens have enough life to carry an accent.
+   * ------------------------------------------------------------------ */
+  --color-brand-50: #eef7f2;
+  --color-brand-100: #d3ecdf;
+  --color-brand-200: #a9d9c3;
+  --color-brand-300: #74bd9f;
+  --color-brand-400: #3f9d79;
+  --color-brand-500: #1d815e;
+  --color-brand-600: #0f6749;
+  --color-brand-700: #0c523b;
+  --color-brand-800: #0d4231;
+  --color-brand-900: #0c3629;
+  --color-brand-950: #041d17;
+
+  /* ------------------------------------------------------------------
+   * Accent — plum. The brand green sits at hue 160°, so its true complement
+   * is 340°; this ramp lands on 342°. Named for the job rather than the hue
+   * so re-colouring later is a change to these eleven values and nothing else.
+   * Used for: primary buttons, eyebrows, step numbers, focus rings.
+   * ------------------------------------------------------------------ */
+  --color-accent-50: #fdf2f6;
+  --color-accent-100: #fbe0e9;
+  --color-accent-200: #f0cdd8;
+  --color-accent-300: #dc9bb1;
+  --color-accent-400: #c26685;
+  --color-accent-500: #a34160;
+  --color-accent-600: #8a2f4b;
+  --color-accent-700: #6f253c;
+  --color-accent-800: #5c2033;
+  --color-accent-900: #4a1a2a;
+
+  /* Sand — warm, quiet fills. Section backgrounds and soft callouts. */
+  --color-sand-50: #fdfaf3;
+  --color-sand-100: #f9f1e1;
+  --color-sand-200: #f0e2c4;
+  --color-sand-300: #e0c99b;
+  --color-sand-400: #ccab6d;
+  --color-sand-500: #b08c4b;
+
+  /* ------------------------------------------------------------------
+   * Ink — body text. Solid values rather than opacity over a tint, so the
+   * contrast ratio is the same whatever sits behind it.
+   *   ink-900  ~15:1 on white   headings
+   *   ink-700  ~11:1 on white   body
+   *   ink-600  ~7.5:1 on white  secondary body
+   *   ink-500  ~5:1 on white    captions, hints (AA at normal size)
+   * ------------------------------------------------------------------ */
+  --color-ink-900: #0f1f1a;
+  --color-ink-700: #2d413a;
+  --color-ink-600: #45584f;
+  --color-ink-500: #5f7168;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: white;
+  color: var(--color-ink-900);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible focus ring for keyboard users on every interactive element. */
+:focus-visible {
+  outline: 2px solid var(--color-accent-600);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
