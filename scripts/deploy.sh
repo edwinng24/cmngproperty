@@ -55,6 +55,11 @@ die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; log "ERROR $*"; exit 1;
 on_error() {
   local line=$1
   warn "failed at line $line"
+  # A release that never went live is just clutter — bin it.
+  if [[ -n "${RELEASE_DIR:-}" && -z "${SWAPPED:-}" && -d "${RELEASE_DIR:-}" ]]; then
+    warn "discarding unpromoted release $(basename "$RELEASE_DIR")"
+    rm -rf "$RELEASE_DIR"
+  fi
   # If we already swapped the symlink, put it back before giving up.
   if [[ -n "${PREVIOUS_RELEASE:-}" && -n "${SWAPPED:-}" ]]; then
     warn "rolling back to $(basename "$PREVIOUS_RELEASE")"
@@ -213,6 +218,7 @@ cmd_deploy() {
   local stamp release
   stamp="$(date -u '+%Y%m%d-%H%M%S')-$short"
   release="$RELEASES_DIR/$stamp"
+  RELEASE_DIR="$release"
   step "Building release $stamp"
 
   # Export the tree rather than copying .git — releases stay small and immutable.
@@ -233,7 +239,9 @@ cmd_deploy() {
     cp -R "$PREVIOUS_RELEASE/node_modules" "$release/node_modules"
   else
     step "Installing dependencies (npm ci)"
-    ( cd "$release" && npm ci --no-audit --no-fund )
+    # --include=dev is required: NODE_ENV=production would otherwise skip
+    # devDependencies, and @tailwindcss/postcss + typescript are build-time deps.
+    ( cd "$release" && npm ci --include=dev --no-audit --no-fund )
   fi
 
   step "next build"
