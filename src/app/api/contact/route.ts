@@ -26,8 +26,21 @@ import { site } from "@/lib/site";
 
 export const runtime = "nodejs";
 
+/**
+ * Reads an env var, treating blank as unset.
+ *
+ * `process.env.X ?? fallback` is not enough: a bare `CONTACT_TO=` line in an
+ * .env file yields "", which is neither null nor undefined, so it wins the
+ * ?? and the fallback never runs. That shipped once and cost a production
+ * outage — nodemailer failed with "No recipients defined".
+ */
+function env(name: string): string | undefined {
+  const v = process.env[name];
+  return v !== undefined && v.trim() !== "" ? v.trim() : undefined;
+}
+
 /** Where enquiries land. */
-const TO = process.env.CONTACT_TO ?? site.email;
+const TO = env("CONTACT_TO") ?? site.email;
 
 /**
  * Envelope sender. CONTACT_FROM and SMTP_FROM are aliases — SMTP_FROM is the
@@ -36,8 +49,7 @@ const TO = process.env.CONTACT_TO ?? site.email;
  * It must be a mailbox the relay is allowed to send as. A Mailtrap or Mailgun
  * account will reject, or silently rewrite, a From on an unverified domain.
  */
-const FROM =
-  process.env.CONTACT_FROM ?? process.env.SMTP_FROM ?? `${site.name} <${TO}>`;
+const FROM = env("CONTACT_FROM") ?? env("SMTP_FROM") ?? `${site.name} <${TO}>`;
 
 type Payload = {
   name: string;
@@ -121,15 +133,15 @@ function asHtml(d: Payload) {
 
 
 async function sendViaMailgun(d: Payload) {
-  const domain = process.env.MAILGUN_DOMAIN;
+  const domain = env("MAILGUN_DOMAIN");
   if (!domain) throw new Error("MAILGUN_API_KEY is set but MAILGUN_DOMAIN is not");
   // EU-region accounts must set MAILGUN_BASE_URL=https://api.eu.mailgun.net —
   // sending an EU key to the US endpoint fails with a 401 that looks like a
   // bad key rather than a wrong region.
-  const base = process.env.MAILGUN_BASE_URL ?? "https://api.mailgun.net";
+  const base = env("MAILGUN_BASE_URL") ?? "https://api.mailgun.net";
 
   const form = new URLSearchParams({
-    from: process.env.CONTACT_FROM ?? process.env.SMTP_FROM ?? `${site.name} <postmaster@${domain}>`,
+    from: env("CONTACT_FROM") ?? env("SMTP_FROM") ?? `${site.name} <postmaster@${domain}>`,
     to: TO,
     subject: `Website enquiry — ${d.name}`,
     text: asText(d),
@@ -143,7 +155,7 @@ async function sendViaMailgun(d: Payload) {
     method: "POST",
     headers: {
       // Mailgun uses HTTP Basic with the literal username "api".
-      Authorization: `Basic ${Buffer.from(`api:${process.env.MAILGUN_API_KEY}`).toString("base64")}`,
+      Authorization: `Basic ${Buffer.from(`api:${env("MAILGUN_API_KEY")}`).toString("base64")}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: form,
@@ -156,23 +168,21 @@ async function sendViaMailgun(d: Payload) {
 }
 
 async function sendViaSmtp(d: Payload) {
-  const host = process.env.SMTP_HOST!;
-  const port = Number(process.env.SMTP_PORT ?? 587);
+  const host = env("SMTP_HOST")!;
+  const port = Number(env("SMTP_PORT") ?? 587);
 
   // SMTP_SECURE, when set, wins. Otherwise infer: 465 is implicit TLS, while
   // 587 and 25 open in plaintext and upgrade via STARTTLS. Mailtrap's live
   // relay is 587 with SMTP_SECURE=false, which both routes agree on.
   const secure =
-    process.env.SMTP_SECURE !== undefined
-      ? process.env.SMTP_SECURE === "true"
-      : port === 465;
+    env("SMTP_SECURE") !== undefined ? env("SMTP_SECURE") === "true" : port === 465;
 
   const transport = nodemailer.createTransport({
     host,
     port,
     secure,
-    auth: process.env.SMTP_USER
-      ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS ?? "" }
+    auth: env("SMTP_USER")
+      ? { user: env("SMTP_USER")!, pass: env("SMTP_PASS") ?? "" }
       : undefined,
   });
 
@@ -191,11 +201,11 @@ async function sendViaResend(d: Payload) {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      Authorization: `Bearer ${env("RESEND_API_KEY")}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: process.env.CONTACT_FROM ?? process.env.SMTP_FROM ?? `${site.name} <onboarding@resend.dev>`,
+      from: env("CONTACT_FROM") ?? env("SMTP_FROM") ?? `${site.name} <onboarding@resend.dev>`,
       to: [TO],
       reply_to: `${d.name} <${d.email}>`,
       subject: `Website enquiry — ${d.name}`,
@@ -210,7 +220,7 @@ async function sendViaResend(d: Payload) {
 }
 
 async function sendViaFormspree(d: Payload) {
-  const res = await fetch(`https://formspree.io/f/${process.env.FORMSPREE_ID}`, {
+  const res = await fetch(`https://formspree.io/f/${env("FORMSPREE_ID")}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ ...d, _replyto: d.email }),
@@ -220,10 +230,10 @@ async function sendViaFormspree(d: Payload) {
 }
 
 async function deliver(d: Payload) {
-  if (process.env.SMTP_HOST) return sendViaSmtp(d);
-  if (process.env.MAILGUN_API_KEY) return sendViaMailgun(d);
-  if (process.env.RESEND_API_KEY) return sendViaResend(d);
-  if (process.env.FORMSPREE_ID) return sendViaFormspree(d);
+  if (env("SMTP_HOST")) return sendViaSmtp(d);
+  if (env("MAILGUN_API_KEY")) return sendViaMailgun(d);
+  if (env("RESEND_API_KEY")) return sendViaResend(d);
+  if (env("FORMSPREE_ID")) return sendViaFormspree(d);
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
@@ -270,9 +280,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, delivery });
   } catch (cause) {
     console.error("[contact] delivery failed", cause);
-    return NextResponse.json(
-      { error: `We could not send that. Please email ${TO} directly.` },
-      { status: 502 },
-    );
+    // Deliberately HTTP 200 with ok:false. A 5xx gets intercepted by
+    // Cloudflare, which swaps our JSON for its own "error code: 502" page —
+    // so the visitor saw a generic "try again" instead of being told to
+    // email us. The failure is reported in the body, which no CDN rewrites.
+    // The client keys off `ok`, not the status code.
+    return NextResponse.json({
+      ok: false,
+      error: `We could not send that. Please email ${TO} directly.`,
+    });
   }
 }

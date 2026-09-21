@@ -50,7 +50,10 @@ export function ContactForm() {
       });
       const body = await response.json().catch(() => null);
 
-      if (response.ok) {
+      // `ok` in the body, not response.ok: delivery failures come back as
+      // HTTP 200 so their message survives the CDN. Treating a 2xx as success
+      // here would show "thanks" for an enquiry that was never sent.
+      if (response.ok && body?.ok === true) {
         form.reset();
         setStatus("success");
         return;
