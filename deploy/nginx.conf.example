@@ -1,0 +1,90 @@
+# nginx in front of `next start` on 127.0.0.1:3000.
+#
+#   sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/cmngproperty
+#   sudo ln -s /etc/nginx/sites-available/cmngproperty /etc/nginx/sites-enabled/
+#   sudo certbot --nginx -d cmngproperty.com -d www.cmngproperty.com
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Run certbot before enabling the TLS block below — it will fill in the
+# certificate paths itself.
+
+upstream cmngproperty {
+    server 127.0.0.1:3000;
+    keepalive 32;
+}
+
+# Canonical host: send www and plain HTTP to https://cmngproperty.com
+server {
+    listen 80;
+    listen [::]:80;
+    server_name cmngproperty.com www.cmngproperty.com;
+
+    # Leave this open so certbot can renew.
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://cmngproperty.com$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name www.cmngproperty.com;
+
+    ssl_certificate     /etc/letsencrypt/live/cmngproperty.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cmngproperty.com/privkey.pem;
+
+    return 301 https://cmngproperty.com$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name cmngproperty.com;
+
+    ssl_certificate     /etc/letsencrypt/live/cmngproperty.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cmngproperty.com/privkey.pem;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+
+    # Banner photographs are ~250KB each; everything else is small.
+    client_max_body_size 2m;
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # Hashed build assets never change — cache them hard.
+    location /_next/static/ {
+        proxy_pass http://cmngproperty;
+        proxy_cache_valid 200 365d;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # The contact endpoint is rate-limited in the app too; this is the outer
+    # guard so abusive traffic never reaches Node.
+    location /api/contact {
+        limit_req zone=contact burst=5 nodelay;
+        proxy_pass http://cmngproperty;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        proxy_pass http://cmngproperty;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        # The app reads this to rate-limit per visitor rather than per server.
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}
+
+# Put this in the http{} block of /etc/nginx/nginx.conf, not here:
+#   limit_req_zone $binary_remote_addr zone=contact:10m rate=10r/m;

@@ -1,0 +1,56 @@
+# systemd unit for cmngproperty.com
+#
+#   sudo cp deploy/cmngproperty.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cmngproperty
+#
+# WorkingDirectory points at the `current` symlink, so a release swap plus a
+# restart is all it takes to move to a new build.
+
+[Unit]
+Description=CMNG Property website
+Documentation=https://github.com/edwinng24/cmngproperty
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cmng
+Group=cmng
+WorkingDirectory=/srv/cmngproperty/current
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# Secrets (SMTP_*, CONTACT_*) are read from the release's .env.local, which is
+# a symlink to /srv/cmngproperty/shared/.env.local.
+ExecStart=/usr/bin/npm start
+
+Restart=always
+RestartSec=3
+# Give the build a moment to bind before systemd decides it is up.
+TimeoutStartSec=60
+KillSignal=SIGTERM
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cmngproperty
+
+# Hardening. The app only needs to read its release directory and listen on a
+# port; nothing else on the box should be reachable from it.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# next start writes its cache under .next/cache at runtime.
+ReadWritePaths=/srv/cmngproperty/releases
+
+[Install]
+WantedBy=multi-user.target
