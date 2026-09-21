@@ -8,10 +8,15 @@ import { site } from "@/lib/site";
  * somewhere else.
  *
  * Delivery is pluggable and picked at runtime from whatever is configured:
- *   1. MAILGUN_API_KEY + MAILGUN_DOMAIN  — sends via the Mailgun HTTP API
- *   2. SMTP_HOST + SMTP_USER + SMTP_PASS — sends through any SMTP mailbox
- *   3. RESEND_API_KEY                    — sends via Resend
+ *   1. SMTP_HOST + SMTP_USER + SMTP_PASS — any SMTP relay (Mailtrap, Google
+ *                                          Workspace, Microsoft 365, ...)
+ *   2. MAILGUN_API_KEY + MAILGUN_DOMAIN  — the Mailgun HTTP API
+ *   3. RESEND_API_KEY                    — Resend
  *   4. FORMSPREE_ID                      — forwards to a Formspree form
+ *
+ * The SMTP variable names match the ones the other sites on this server use,
+ * so a working block of config can be copied between them unchanged:
+ * SMTP_FROM, SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS.
  *
  * With none of them set, development logs the enquiry to the server and
  * returns success so the form is usable on a fresh clone. Production instead
@@ -23,6 +28,16 @@ export const runtime = "nodejs";
 
 /** Where enquiries land. */
 const TO = process.env.CONTACT_TO ?? site.email;
+
+/**
+ * Envelope sender. CONTACT_FROM and SMTP_FROM are aliases — SMTP_FROM is the
+ * name the sibling sites use, so their config drops in as-is.
+ *
+ * It must be a mailbox the relay is allowed to send as. A Mailtrap or Mailgun
+ * account will reject, or silently rewrite, a From on an unverified domain.
+ */
+const FROM =
+  process.env.CONTACT_FROM ?? process.env.SMTP_FROM ?? `${site.name} <${TO}>`;
 
 type Payload = {
   name: string;
@@ -114,7 +129,7 @@ async function sendViaMailgun(d: Payload) {
   const base = process.env.MAILGUN_BASE_URL ?? "https://api.mailgun.net";
 
   const form = new URLSearchParams({
-    from: process.env.CONTACT_FROM ?? `${site.name} <postmaster@${domain}>`,
+    from: process.env.CONTACT_FROM ?? process.env.SMTP_FROM ?? `${site.name} <postmaster@${domain}>`,
     to: TO,
     subject: `Website enquiry — ${d.name}`,
     text: asText(d),
@@ -143,20 +158,26 @@ async function sendViaMailgun(d: Payload) {
 async function sendViaSmtp(d: Payload) {
   const host = process.env.SMTP_HOST!;
   const port = Number(process.env.SMTP_PORT ?? 587);
+
+  // SMTP_SECURE, when set, wins. Otherwise infer: 465 is implicit TLS, while
+  // 587 and 25 open in plaintext and upgrade via STARTTLS. Mailtrap's live
+  // relay is 587 with SMTP_SECURE=false, which both routes agree on.
+  const secure =
+    process.env.SMTP_SECURE !== undefined
+      ? process.env.SMTP_SECURE === "true"
+      : port === 465;
+
   const transport = nodemailer.createTransport({
     host,
     port,
-    // 465 is implicit TLS; 587 and 25 start plaintext and upgrade via STARTTLS.
-    secure: port === 465,
+    secure,
     auth: process.env.SMTP_USER
       ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS ?? "" }
       : undefined,
   });
 
   await transport.sendMail({
-    // Must be a mailbox the SMTP account is allowed to send as, otherwise the
-    // server will reject it or the message will fail SPF at the far end.
-    from: process.env.CONTACT_FROM ?? `${site.name} <${TO}>`,
+    from: FROM,
     to: TO,
     replyTo: `${d.name} <${d.email}>`,
     subject: `Website enquiry — ${d.name}`,
@@ -174,7 +195,7 @@ async function sendViaResend(d: Payload) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: process.env.CONTACT_FROM ?? `${site.name} <onboarding@resend.dev>`,
+      from: process.env.CONTACT_FROM ?? process.env.SMTP_FROM ?? `${site.name} <onboarding@resend.dev>`,
       to: [TO],
       reply_to: `${d.name} <${d.email}>`,
       subject: `Website enquiry — ${d.name}`,
@@ -199,15 +220,15 @@ async function sendViaFormspree(d: Payload) {
 }
 
 async function deliver(d: Payload) {
-  if (process.env.MAILGUN_API_KEY) return sendViaMailgun(d);
   if (process.env.SMTP_HOST) return sendViaSmtp(d);
+  if (process.env.MAILGUN_API_KEY) return sendViaMailgun(d);
   if (process.env.RESEND_API_KEY) return sendViaResend(d);
   if (process.env.FORMSPREE_ID) return sendViaFormspree(d);
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
       "No delivery method configured " +
-        "(MAILGUN_API_KEY, SMTP_HOST, RESEND_API_KEY or FORMSPREE_ID)",
+        "(SMTP_HOST, MAILGUN_API_KEY, RESEND_API_KEY or FORMSPREE_ID)",
     );
   }
   console.warn(

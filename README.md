@@ -107,8 +107,8 @@ Delivery is chosen at runtime from whatever is configured, first match wins:
 
 | Configured | Behaviour |
 |---|---|
-| `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` | Sends via the Mailgun HTTP API. Set `MAILGUN_BASE_URL=https://api.eu.mailgun.net` for EU-region accounts |
-| `SMTP_HOST` + `SMTP_USER` + `SMTP_PASS` | Sends through any SMTP mailbox — Google Workspace, Microsoft 365, or Mailgun's SMTP endpoint |
+| `SMTP_HOST` + `SMTP_USER` + `SMTP_PASS` | Any SMTP relay — Mailtrap, Google Workspace, Microsoft 365, Mailgun's SMTP endpoint. Variable names (`SMTP_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`) match the other sites on the server, so config copies across unchanged |
+| `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` | The Mailgun HTTP API. Set `MAILGUN_BASE_URL=https://api.eu.mailgun.net` for EU-region accounts |
 | `RESEND_API_KEY` | Sends via [Resend](https://resend.com) |
 | `FORMSPREE_ID` | Forwards to a [Formspree](https://formspree.io) form |
 | none, in development | Logs the enquiry to the server and returns success, so the form works on a fresh clone |
