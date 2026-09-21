@@ -38,11 +38,19 @@ echo "==> Checking it came up"
 # pm2 reports "online" the moment node starts, which is before Next is
 # listening — and well before it has failed to boot. Ask the app itself.
 for i in $(seq 1 20); do
-  if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/"; then
-    echo "    healthy on :$PORT"
+  # -s not -sS: a refused connection on the first attempt or two is normal
+  # while Next boots, and printing curl's error there makes a healthy deploy
+  # look broken. The failure case below is the one worth being loud about.
+  if curl -fs -o /dev/null "http://127.0.0.1:$PORT/"; then
+    echo "    healthy on :$PORT (attempt $i)"
     break
   fi
-  [ "$i" = 20 ] && { echo "    NOT RESPONDING — pm2 logs $APP"; exit 1; }
+  if [ "$i" = 20 ]; then
+    echo "    NOT RESPONDING on :$PORT after 40s"
+    curl -sS -o /dev/null "http://127.0.0.1:$PORT/" || true   # show why
+    echo "    pm2 logs $APP --lines 50"
+    exit 1
+  fi
   sleep 2
 done
 
