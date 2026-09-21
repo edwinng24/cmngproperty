@@ -8,9 +8,10 @@ import { site } from "@/lib/site";
  * somewhere else.
  *
  * Delivery is pluggable and picked at runtime from whatever is configured:
- *   1. SMTP_HOST + SMTP_USER + SMTP_PASS — sends through your own mailbox
- *   2. RESEND_API_KEY                    — sends via Resend
- *   3. FORMSPREE_ID                      — forwards to a Formspree form
+ *   1. MAILGUN_API_KEY + MAILGUN_DOMAIN  — sends via the Mailgun HTTP API
+ *   2. SMTP_HOST + SMTP_USER + SMTP_PASS — sends through any SMTP mailbox
+ *   3. RESEND_API_KEY                    — sends via Resend
+ *   4. FORMSPREE_ID                      — forwards to a Formspree form
  *
  * With none of them set, development logs the enquiry to the server and
  * returns success so the form is usable on a fresh clone. Production instead
@@ -103,6 +104,42 @@ function asHtml(d: Payload) {
 </div>`;
 }
 
+
+async function sendViaMailgun(d: Payload) {
+  const domain = process.env.MAILGUN_DOMAIN;
+  if (!domain) throw new Error("MAILGUN_API_KEY is set but MAILGUN_DOMAIN is not");
+  // EU-region accounts must set MAILGUN_BASE_URL=https://api.eu.mailgun.net —
+  // sending an EU key to the US endpoint fails with a 401 that looks like a
+  // bad key rather than a wrong region.
+  const base = process.env.MAILGUN_BASE_URL ?? "https://api.mailgun.net";
+
+  const form = new URLSearchParams({
+    from: process.env.CONTACT_FROM ?? `${site.name} <postmaster@${domain}>`,
+    to: TO,
+    subject: `Website enquiry — ${d.name}`,
+    text: asText(d),
+    html: asHtml(d),
+    // Mailgun passes any h:* parameter through as a real header.
+    "h:Reply-To": `${d.name} <${d.email}>`,
+    "o:tag": "contact-form",
+  });
+
+  const res = await fetch(`${base}/v3/${domain}/messages`, {
+    method: "POST",
+    headers: {
+      // Mailgun uses HTTP Basic with the literal username "api".
+      Authorization: `Basic ${Buffer.from(`api:${process.env.MAILGUN_API_KEY}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: form,
+  });
+
+  if (!res.ok) {
+    throw new Error(`Mailgun responded ${res.status}: ${await res.text()}`);
+  }
+  return "mailgun";
+}
+
 async function sendViaSmtp(d: Payload) {
   const host = process.env.SMTP_HOST!;
   const port = Number(process.env.SMTP_PORT ?? 587);
@@ -162,13 +199,15 @@ async function sendViaFormspree(d: Payload) {
 }
 
 async function deliver(d: Payload) {
+  if (process.env.MAILGUN_API_KEY) return sendViaMailgun(d);
   if (process.env.SMTP_HOST) return sendViaSmtp(d);
   if (process.env.RESEND_API_KEY) return sendViaResend(d);
   if (process.env.FORMSPREE_ID) return sendViaFormspree(d);
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "No delivery method configured (SMTP_HOST, RESEND_API_KEY or FORMSPREE_ID)",
+      "No delivery method configured " +
+        "(MAILGUN_API_KEY, SMTP_HOST, RESEND_API_KEY or FORMSPREE_ID)",
     );
   }
   console.warn(
