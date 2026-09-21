@@ -8,11 +8,15 @@ import { site } from "@/lib/site";
  * somewhere else.
  *
  * Delivery is pluggable and picked at runtime from whatever is configured:
- *   1. SMTP_HOST + SMTP_USER + SMTP_PASS — any SMTP relay (Mailtrap, Google
- *                                          Workspace, Microsoft 365, ...)
- *   2. MAILGUN_API_KEY + MAILGUN_DOMAIN  — the Mailgun HTTP API
- *   3. RESEND_API_KEY                    — Resend
- *   4. FORMSPREE_ID                      — forwards to a Formspree form
+ *   1. MAILTRAP_TOKEN                    — the Mailtrap HTTP API, over 443
+ *   2. SMTP_HOST + SMTP_USER + SMTP_PASS — any SMTP relay, over 587/465
+ *   3. MAILGUN_API_KEY + MAILGUN_DOMAIN  — the Mailgun HTTP API
+ *   4. RESEND_API_KEY                    — Resend
+ *   5. FORMSPREE_ID                      — forwards to a Formspree form
+ *
+ * Prefer the HTTP API over SMTP on a VPS: most providers block outbound 25
+ * and many block 587, which makes SMTP hang until the proxy times out. The
+ * Mailtrap token is the same string either way — it is the SMTP_PASS value.
  *
  * The SMTP variable names match the ones the other sites on this server use,
  * so a working block of config can be copied between them unchanged:
@@ -132,6 +136,45 @@ function asHtml(d: Payload) {
 }
 
 
+
+/** Splits `Name <a@b.c>` or a bare address into the shape JSON APIs expect. */
+function parseAddress(value: string): { email: string; name?: string } {
+  const m = value.match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
+  return m ? { email: m[2].trim(), name: m[1].replace(/^"|"$/g, "") || undefined }
+           : { email: value.trim() };
+}
+
+async function sendViaMailtrap(d: Payload) {
+  // Mailtrap's transactional send endpoint. Sandbox accounts use
+  // sandbox.api.mailtrap.io instead — override with MAILTRAP_API_URL.
+  const url = env("MAILTRAP_API_URL") ?? "https://send.api.mailtrap.io/api/send";
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Api-Token": env("MAILTRAP_TOKEN")!,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: parseAddress(FROM),
+      to: [{ email: TO }],
+      subject: `Website enquiry — ${d.name}`,
+      text: asText(d),
+      html: asHtml(d),
+      headers: { "Reply-To": `${d.name} <${d.email}>` },
+      category: "contact-form",
+    }),
+  });
+
+  const body = await res.text();
+  // Mailtrap answers 200 with {"success":false,"errors":[...]} for a rejected
+  // sender, so the status alone is not enough to call it delivered.
+  if (!res.ok || body.includes('"success":false')) {
+    throw new Error(`Mailtrap responded ${res.status}: ${body}`);
+  }
+  return "mailtrap";
+}
+
 async function sendViaMailgun(d: Payload) {
   const domain = env("MAILGUN_DOMAIN");
   if (!domain) throw new Error("MAILGUN_API_KEY is set but MAILGUN_DOMAIN is not");
@@ -230,6 +273,7 @@ async function sendViaFormspree(d: Payload) {
 }
 
 async function deliver(d: Payload) {
+  if (env("MAILTRAP_TOKEN")) return sendViaMailtrap(d);
   if (env("SMTP_HOST")) return sendViaSmtp(d);
   if (env("MAILGUN_API_KEY")) return sendViaMailgun(d);
   if (env("RESEND_API_KEY")) return sendViaResend(d);
@@ -237,8 +281,8 @@ async function deliver(d: Payload) {
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "No delivery method configured " +
-        "(SMTP_HOST, MAILGUN_API_KEY, RESEND_API_KEY or FORMSPREE_ID)",
+      "No delivery method configured (MAILTRAP_TOKEN, SMTP_HOST, " +
+        "MAILGUN_API_KEY, RESEND_API_KEY or FORMSPREE_ID)",
     );
   }
   console.warn(

@@ -107,6 +107,7 @@ Delivery is chosen at runtime from whatever is configured, first match wins:
 
 | Configured | Behaviour |
 |---|---|
+| `MAILTRAP_TOKEN` | Mailtrap's HTTP API over 443. Same token as `SMTP_PASS`. Preferred on a VPS, where outbound 587 is often blocked |
 | `SMTP_HOST` + `SMTP_USER` + `SMTP_PASS` | Any SMTP relay — Mailtrap, Google Workspace, Microsoft 365, Mailgun's SMTP endpoint. Variable names (`SMTP_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`) match the other sites on the server, so config copies across unchanged |
 | `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` | The Mailgun HTTP API. Set `MAILGUN_BASE_URL=https://api.eu.mailgun.net` for EU-region accounts |
 | `RESEND_API_KEY` | Sends via [Resend](https://resend.com) |
