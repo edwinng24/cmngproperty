@@ -66,12 +66,28 @@ const FROM =
  * instead of only surfacing when someone submits the form. No secrets here —
  * the password is reported as a length.
  */
+const SENDER_IS_EXPLICIT =
+  env("SMTP_FROM") !== undefined ||
+  env("CONTACT_FROM") !== undefined ||
+  env("ADMIN_EMAIL") !== undefined;
+
 if (env("SMTP_HOST")) {
   console.log(
     `[contact] SMTP ${env("SMTP_HOST")}:${env("SMTP_PORT") ?? 587} ` +
       `secure=${env("SMTP_SECURE") ?? "(inferred)"} user=${env("SMTP_USER")} ` +
       `pass=${(process.env.SMTP_PASS ?? "").length} chars | from=${FROM} to=${TO}`,
   );
+  if (!SENDER_IS_EXPLICIT) {
+    // The fallback sender is built from site.email, whose domain is almost
+    // certainly not the one verified with the relay. Mailtrap answers that
+    // with "550 5.7.1 Sending from domain ... is not allowed" on every
+    // submission, so say so at boot rather than once per lost enquiry.
+    console.warn(
+      `[contact] SMTP_FROM is not set, so mail will be sent as ${FROM}. ` +
+        "The relay will reject this unless that domain is verified with it. " +
+        "Set SMTP_FROM to an address on your verified sending domain.",
+    );
+  }
 } else {
   console.warn(
     "[contact] SMTP_HOST not set — check which provider will be used",
@@ -308,6 +324,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, delivery });
   } catch (cause) {
     console.error("[contact] delivery failed", cause);
+    // 550/553 on MAIL FROM is the relay refusing the sender domain, which is
+    // a configuration problem rather than a transient one. Name the fix.
+    const text = cause instanceof Error ? cause.message : String(cause);
+    if (/\b(550|553)\b/.test(text) && /domain|sender|from/i.test(text)) {
+      console.error(
+        `[contact] the relay refused the sender "${FROM}". SMTP_FROM must be ` +
+          "an address on a domain verified with your provider — verified " +
+          "sending domains are separate from where mail is delivered, so the " +
+          "recipient does not need to match.",
+      );
+    }
     // Deliberately HTTP 200 with ok:false. A 5xx gets intercepted by
     // Cloudflare, which swaps our JSON for its own "error code: 502" page —
     // so the visitor saw a generic "try again" instead of being told to
