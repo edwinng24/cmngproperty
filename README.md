@@ -107,8 +107,7 @@ Delivery is chosen at runtime from whatever is configured, first match wins:
 
 | Configured | Behaviour |
 |---|---|
-| `MAILTRAP_TOKEN` | Mailtrap's HTTP API over 443. Same token as `SMTP_PASS`. Preferred on a VPS, where outbound 587 is often blocked |
-| `SMTP_HOST` + `SMTP_USER` + `SMTP_PASS` | Any SMTP relay — Mailtrap, Google Workspace, Microsoft 365, Mailgun's SMTP endpoint. Variable names (`SMTP_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`) match the other sites on the server, so config copies across unchanged |
+| `SMTP_HOST` + `SMTP_USER` + `SMTP_PASS` | Plain SMTP via nodemailer — the same approach the sibling sites on the server use, with Mailtrap as the relay. Any SMTP relay — Mailtrap, Google Workspace, Microsoft 365, Mailgun's SMTP endpoint. Variable names (`SMTP_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`) match the other sites on the server, so config copies across unchanged |
 | `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` | The Mailgun HTTP API. Set `MAILGUN_BASE_URL=https://api.eu.mailgun.net` for EU-region accounts |
 | `RESEND_API_KEY` | Sends via [Resend](https://resend.com) |
 | `FORMSPREE_ID` | Forwards to a [Formspree](https://formspree.io) form |
@@ -119,9 +118,17 @@ That last row is deliberate. A contact form that accepts a message, shows
 "thanks", and delivers nothing is worse than one that admits it is not wired
 up — so production refuses rather than pretending.
 
-Mail goes out as multipart text + HTML. `CONTACT_FROM` must be a mailbox the
-sending account is allowed to send as, or the message will be rejected or fail
-SPF at the far end.
+Mail goes out as multipart text + HTML.
+
+`SMTP_FROM` must be a real address on a domain verified with the provider.
+It is **not** `SMTP_USER` — on Mailtrap's live relay that value is the literal
+string `api`, and `From: api` is rejected. The sender resolves
+`SMTP_FROM` → `CONTACT_FROM` → `ADMIN_EMAIL` → a fallback built from
+`site.email`.
+
+On boot the route logs the relay, user, password length, sender and recipient
+it resolved, so a misconfiguration shows up in `pm2 logs cmngproperty` rather
+than waiting for someone to submit the form.
 
 ## Banner photography
 
