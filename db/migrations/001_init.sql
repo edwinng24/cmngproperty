@@ -1,4 +1,12 @@
 -- Initial schema: managed properties, rental applications, admin accounts.
+--
+-- The applications table mirrors the paper form (Application-Warden-2018):
+-- two applicants, three prior addresses, present and previous employment for
+-- each applicant, occupants, vehicles, disclosures and two signatures.
+--
+-- Repeating groups are JSON rather than child tables. They are only ever read
+-- back with the application they belong to and never queried across, so four
+-- extra tables would buy nothing but joins.
 
 CREATE TABLE IF NOT EXISTS properties (
   id                 INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -9,10 +17,18 @@ CREATE TABLE IF NOT EXISTS properties (
   city               VARCHAR(100)  NOT NULL,
   region             VARCHAR(60)   NOT NULL,
   postal             VARCHAR(20)   NOT NULL,
-  -- Money is stored in cents. Floats cannot represent 1234.95 exactly, and
+
+  -- Money is stored in cents. Floats cannot represent 2550.00 exactly, and
   -- rent arithmetic that is a hundredth out is worse than useless.
-  monthly_rent_cents INT UNSIGNED  NOT NULL,
-  deposit_cents      INT UNSIGNED  NULL,
+  monthly_rent_cents     INT UNSIGNED NOT NULL,
+  deposit_cents          INT UNSIGNED NULL,
+  credit_check_fee_cents INT UNSIGNED NULL,
+  other_charges_cents    INT UNSIGNED NULL,
+  other_charges_label    VARCHAR(120) NULL,
+  -- Per applicant, non-refundable. California caps this (Civ. Code 1950.6)
+  -- and the cap is CPI-adjusted annually, so it is configurable per property.
+  screening_fee_cents    INT UNSIGNED NOT NULL DEFAULT 3000,
+
   bedrooms           DECIMAL(3,1)  NULL,
   bathrooms          DECIMAL(3,1)  NULL,
   available_from     DATE          NULL,
@@ -57,65 +73,80 @@ CREATE TABLE IF NOT EXISTS applications (
   id          INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   property_id INT UNSIGNED NOT NULL,
 
-  -- Terms are snapshotted at submission. Rent changes and properties get
-  -- renamed; an application must always show what the applicant agreed to.
-  property_slug      VARCHAR(120) NOT NULL,
-  property_address   VARCHAR(400) NOT NULL,
-  monthly_rent_cents INT UNSIGNED NOT NULL,
+  -- "THIS SECTION TO BE COMPLETED BY LANDLORD" on the paper form, snapshotted
+  -- at submission. Rent and fees change; an application must always show the
+  -- terms the applicant actually saw and agreed to.
+  property_slug          VARCHAR(120) NOT NULL,
+  property_address       VARCHAR(400) NOT NULL,
+  monthly_rent_cents     INT UNSIGNED NOT NULL,
+  deposit_cents          INT UNSIGNED NULL,
+  credit_check_fee_cents INT UNSIGNED NULL,
+  other_charges_cents    INT UNSIGNED NULL,
+  other_charges_label    VARCHAR(120) NULL,
+  total_due_cents        INT UNSIGNED NULL,
+  screening_fee_cents    INT UNSIGNED NULL,
 
-  -- Applicant
-  full_name        VARCHAR(160) NOT NULL,
-  email            VARCHAR(200) NOT NULL,
-  phone            VARCHAR(40)  NOT NULL,
-  date_of_birth    DATE         NULL,
-  -- AES-256-GCM, keyed by APP_ENCRYPTION_KEY, never selected by default.
-  ssn_encrypted    VARBINARY(255) NULL,
-  drivers_license  VARCHAR(60)  NULL,
-  license_state    VARCHAR(40)  NULL,
+  rental_term ENUM('month_to_month','lease') NOT NULL DEFAULT 'month_to_month',
+  lease_from  DATE NULL,
+  lease_to    DATE NULL,
 
-  desired_move_in  DATE         NULL,
+  -- Applicant #1, duplicated out of the JSON so the admin list can show and
+  -- sort by a name without unpacking every row.
+  applicant_name  VARCHAR(200) NOT NULL,
+  applicant_email VARCHAR(200) NOT NULL,
+  applicant_phone VARCHAR(40)  NULL,
 
-  -- Residence history
-  current_address     VARCHAR(300) NULL,
-  current_landlord    VARCHAR(160) NULL,
-  current_landlord_phone VARCHAR(40) NULL,
-  current_rent_cents  INT UNSIGNED NULL,
-  current_move_in     DATE         NULL,
-  reason_for_leaving  VARCHAR(500) NULL,
-  previous_address    VARCHAR(300) NULL,
-  previous_landlord   VARCHAR(160) NULL,
-  previous_landlord_phone VARCHAR(40) NULL,
+  -- [{ last, first, middle, other_names, other_id, dob, work_phone,
+  --    home_phone, email, dl_number, dl_expiration, dl_state }]
+  -- One or two entries. SSNs are NOT in here — see ssns_encrypted.
+  applicants JSON NOT NULL,
 
-  -- Employment and income
-  employer         VARCHAR(160) NULL,
-  job_title        VARCHAR(120) NULL,
-  employer_phone   VARCHAR(40)  NULL,
-  employed_since   DATE         NULL,
-  monthly_income_cents INT UNSIGNED NULL,
-  other_income     VARCHAR(300) NULL,
+  -- AES-256-GCM over a JSON array of the applicants' SSNs, keyed by
+  -- APP_ENCRYPTION_KEY which lives outside the database. Kept apart from the
+  -- applicants blob so the rest of an application stays readable in a query.
+  ssns_encrypted VARBINARY(1024) NULL,
 
-  -- Repeating groups. JSON rather than four more tables: they are only ever
-  -- read back with the application they belong to, never queried across.
-  occupants        JSON NULL,
-  pets             JSON NULL,
-  vehicles         JSON NULL,
-  ref_contacts     JSON NULL,
+  -- Three entries: present, previous, next previous.
+  -- [{ address, city, state, zip, date_in, date_out, manager_name,
+  --    manager_phone, reason_for_moving }]
+  rental_history JSON NULL,
 
-  emergency_name   VARCHAR(160) NULL,
-  emergency_phone  VARCHAR(40)  NULL,
-  emergency_relation VARCHAR(80) NULL,
+  -- Present and last position for each applicant, up to four entries.
+  -- [{ applicant, which, occupation, employer_name, employer_address,
+  --    employer_city_state_zip, supervisor_name, supervisor_phone, how_long }]
+  employment JSON NULL,
 
-  -- Disclosures
-  has_been_evicted    TINYINT(1) NULL,
-  has_filed_bankruptcy TINYINT(1) NULL,
-  has_felony          TINYINT(1) NULL,
-  is_smoker           TINYINT(1) NULL,
-  disclosure_notes    TEXT NULL,
+  -- { applicant1_cents, applicant2_cents, other_cents, other_source,
+  --   total_cents }
+  income JSON NULL,
 
-  -- Consent
-  signature_name   VARCHAR(160) NOT NULL,
-  signed_at        DATETIME     NOT NULL,
-  consent_screening TINYINT(1)  NOT NULL DEFAULT 0,
+  -- [{ name, relationship, age }]
+  occupants      JSON NULL,
+  total_adults   TINYINT UNSIGNED NULL,
+  total_children TINYINT UNSIGNED NULL,
+
+  -- [{ make, model, year, state_plate }]
+  vehicles       JSON NULL,
+  other_vehicles VARCHAR(400) NULL,
+
+  has_pets                  TINYINT(1) NULL,
+  pets_describe             VARCHAR(400) NULL,
+  has_liquid_furniture      TINYINT(1) NULL,
+  liquid_furniture_describe VARCHAR(400) NULL,
+
+  -- The three questions the paper form asks, verbatim in intent.
+  ever_evicted         TINYINT(1) NULL,
+  ever_bankruptcy      TINYINT(1) NULL,
+  ever_drug_conviction TINYINT(1) NULL,
+
+  -- Consent. The certification wording is reproduced on the form itself; what
+  -- is recorded here is that it was agreed to, by whom, and when.
+  signature_1       VARCHAR(200) NOT NULL,
+  signed_1_at       DATETIME     NOT NULL,
+  signature_2       VARCHAR(200) NULL,
+  signed_2_at       DATETIME     NULL,
+  certification_ack TINYINT(1)   NOT NULL DEFAULT 0,
+  screening_fee_ack TINYINT(1)   NOT NULL DEFAULT 0,
 
   status       ENUM('new','reviewing','approved','declined','withdrawn')
                NOT NULL DEFAULT 'new',

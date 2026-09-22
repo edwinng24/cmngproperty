@@ -11,6 +11,10 @@ export type Property = {
   postal: string;
   monthly_rent_cents: number;
   deposit_cents: number | null;
+  credit_check_fee_cents: number | null;
+  other_charges_cents: number | null;
+  other_charges_label: string | null;
+  screening_fee_cents: number;
   bedrooms: string | null;
   bathrooms: string | null;
   available_from: string | null;
@@ -21,8 +25,22 @@ export type Property = {
 export type PropertyInput = Omit<Property, "id" | "slug"> & { slug?: string };
 
 const COLUMNS = `id, slug, address_line1, address_line2, city, region, postal,
-  monthly_rent_cents, deposit_cents, bedrooms, bathrooms, available_from,
-  description, is_active`;
+  monthly_rent_cents, deposit_cents, credit_check_fee_cents,
+  other_charges_cents, other_charges_label, screening_fee_cents,
+  bedrooms, bathrooms, available_from, description, is_active`;
+
+/**
+ * "Amount Due Prior to Occupancy" from the paper form: first month's rent,
+ * deposit, credit-check fee and anything else, summed.
+ */
+export function totalDueCents(p: Property): number {
+  return (
+    p.monthly_rent_cents +
+    (p.deposit_cents ?? 0) +
+    (p.credit_check_fee_cents ?? 0) +
+    (p.other_charges_cents ?? 0)
+  );
+}
 
 /** "12 Oak Street, Apt 4, Springfield, IL 62704" */
 export function formatAddress(p: Property): string {
@@ -111,9 +129,11 @@ export async function createProperty(input: PropertyInput): Promise<number> {
   const res = await execute(
     `INSERT INTO properties
        (slug, address_line1, address_line2, city, region, postal,
-        monthly_rent_cents, deposit_cents, bedrooms, bathrooms,
+        monthly_rent_cents, deposit_cents, credit_check_fee_cents,
+        other_charges_cents, other_charges_label, screening_fee_cents,
+        bedrooms, bathrooms,
         available_from, description, is_active)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       slug,
       input.address_line1,
@@ -123,6 +143,10 @@ export async function createProperty(input: PropertyInput): Promise<number> {
       input.postal,
       input.monthly_rent_cents,
       input.deposit_cents,
+      input.credit_check_fee_cents,
+      input.other_charges_cents,
+      input.other_charges_label,
+      input.screening_fee_cents,
       input.bedrooms,
       input.bathrooms,
       input.available_from,
@@ -144,7 +168,9 @@ export async function updateProperty(
   await execute(
     `UPDATE properties SET
        slug = ?, address_line1 = ?, address_line2 = ?, city = ?, region = ?,
-       postal = ?, monthly_rent_cents = ?, deposit_cents = ?, bedrooms = ?,
+       postal = ?, monthly_rent_cents = ?, deposit_cents = ?,
+       credit_check_fee_cents = ?, other_charges_cents = ?,
+       other_charges_label = ?, screening_fee_cents = ?, bedrooms = ?,
        bathrooms = ?, available_from = ?, description = ?, is_active = ?
      WHERE id = ?`,
     [
@@ -156,6 +182,10 @@ export async function updateProperty(
       input.postal,
       input.monthly_rent_cents,
       input.deposit_cents,
+      input.credit_check_fee_cents,
+      input.other_charges_cents,
+      input.other_charges_label,
+      input.screening_fee_cents,
       input.bedrooms,
       input.bathrooms,
       input.available_from,
