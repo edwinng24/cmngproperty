@@ -1,98 +1,17 @@
 import { NextResponse } from "next/server";
-import nodemailer from "nodemailer";
-import { site } from "@/lib/site";
+import { FROM, TO, esc, logMailConfig, sendMail } from "@/lib/mailer";
 
 /**
- * Contact form endpoint. Every submission is emailed to `site.email`
- * (info@cmngproperty.com) — override with CONTACT_TO if it should go
- * somewhere else.
+ * Contact form endpoint. Every submission is emailed to the address the mailer
+ * resolves (info@cmngproperty.com unless CONTACT_TO says otherwise), with
+ * Reply-To set to the sender so replying answers the enquirer directly.
  *
- * Delivery is pluggable and picked at runtime from whatever is configured:
- *   1. SMTP_HOST + SMTP_USER + SMTP_PASS — plain SMTP via nodemailer
- *   2. MAILGUN_API_KEY + MAILGUN_DOMAIN  — Mailgun HTTP API
- *   3. RESEND_API_KEY                    — Resend
- *   4. FORMSPREE_ID                      — forwards to a Formspree form
- *
- * SMTP is the path the sibling sites on this server use, with Mailtrap as the
- * relay. There is no Mailtrap SDK involved: everything provider-specific is
- * configuration, so the same variables point at Mailtrap, Google Workspace or
- * anything else that speaks SMTP.
- *
- * The SMTP variable names match the ones the other sites on this server use,
- * so a working block of config can be copied between them unchanged:
- * SMTP_FROM, SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS.
- *
- * With none of them set, development logs the enquiry to the server and
- * returns success so the form is usable on a fresh clone. Production instead
- * returns an error, because a form that silently swallows enquiries is worse
- * than one that admits it is not wired up.
+ * Delivery lives in src/lib/mailer.ts, shared with rental applications.
  */
 
 export const runtime = "nodejs";
 
-/**
- * Reads an env var, treating blank as unset.
- *
- * `process.env.X ?? fallback` is not enough: a bare `CONTACT_TO=` line in an
- * .env file yields "", which is neither null nor undefined, so it wins the
- * ?? and the fallback never runs. That shipped once and cost a production
- * outage — nodemailer failed with "No recipients defined".
- */
-function env(name: string): string | undefined {
-  const v = process.env[name];
-  return v !== undefined && v.trim() !== "" ? v.trim() : undefined;
-}
-
-/** Where enquiries land. CONTACT_TO and ADMIN_EMAIL are both honoured. */
-const TO = env("CONTACT_TO") ?? env("ADMIN_EMAIL") ?? site.email;
-
-/**
- * Envelope sender. CONTACT_FROM and SMTP_FROM are aliases — SMTP_FROM is the
- * name the sibling sites use, so their config drops in as-is.
- *
- * It must be a mailbox the relay is allowed to send as. A Mailtrap or Mailgun
- * account will reject, or silently rewrite, a From on an unverified domain.
- */
-const FROM =
-  env("SMTP_FROM") ?? env("CONTACT_FROM") ?? env("ADMIN_EMAIL") ?? `${site.name} <${TO}>`;
-
-/**
- * Never send as SMTP_USER. On Mailtrap's live relay that value is the literal
- * string "api", and `From: api` is rejected outright. The sender has to be a
- * real address on a domain verified with the provider, which is what SMTP_FROM
- * is for.
- *
- * Logged once at boot so a misconfigured relay is obvious in `pm2 logs`
- * instead of only surfacing when someone submits the form. No secrets here —
- * the password is reported as a length.
- */
-const SENDER_IS_EXPLICIT =
-  env("SMTP_FROM") !== undefined ||
-  env("CONTACT_FROM") !== undefined ||
-  env("ADMIN_EMAIL") !== undefined;
-
-if (env("SMTP_HOST")) {
-  console.log(
-    `[contact] SMTP ${env("SMTP_HOST")}:${env("SMTP_PORT") ?? 587} ` +
-      `secure=${env("SMTP_SECURE") ?? "(inferred)"} user=${env("SMTP_USER")} ` +
-      `pass=${(process.env.SMTP_PASS ?? "").length} chars | from=${FROM} to=${TO}`,
-  );
-  if (!SENDER_IS_EXPLICIT) {
-    // The fallback sender is built from site.email, whose domain is almost
-    // certainly not the one verified with the relay. Mailtrap answers that
-    // with "550 5.7.1 Sending from domain ... is not allowed" on every
-    // submission, so say so at boot rather than once per lost enquiry.
-    console.warn(
-      `[contact] SMTP_FROM is not set, so mail will be sent as ${FROM}. ` +
-        "The relay will reject this unless that domain is verified with it. " +
-        "Set SMTP_FROM to an address on your verified sending domain.",
-    );
-  }
-} else {
-  console.warn(
-    "[contact] SMTP_HOST not set — check which provider will be used",
-  );
-}
+logMailConfig();
 
 type Payload = {
   name: string;
@@ -157,9 +76,6 @@ function asText(d: Payload) {
   ].join("\n");
 }
 
-const esc = (v: string) =>
-  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
 function asHtml(d: Payload) {
   const row = (k: string, v: string) =>
     `<tr><td style="padding:4px 14px 4px 0;color:#5f7168">${k}</td>` +
@@ -172,123 +88,6 @@ function asHtml(d: Payload) {
   </table>
   <div style="white-space:pre-wrap;padding:14px 16px;background:#eef7f2;border-left:3px solid #8a2f4b;color:#2d413a">${esc(d.message)}</div>
 </div>`;
-}
-
-
-
-async function sendViaMailgun(d: Payload) {
-  const domain = env("MAILGUN_DOMAIN");
-  if (!domain) throw new Error("MAILGUN_API_KEY is set but MAILGUN_DOMAIN is not");
-  // EU-region accounts must set MAILGUN_BASE_URL=https://api.eu.mailgun.net —
-  // sending an EU key to the US endpoint fails with a 401 that looks like a
-  // bad key rather than a wrong region.
-  const base = env("MAILGUN_BASE_URL") ?? "https://api.mailgun.net";
-
-  const form = new URLSearchParams({
-    from: env("CONTACT_FROM") ?? env("SMTP_FROM") ?? `${site.name} <postmaster@${domain}>`,
-    to: TO,
-    subject: `Website enquiry — ${d.name}`,
-    text: asText(d),
-    html: asHtml(d),
-    // Mailgun passes any h:* parameter through as a real header.
-    "h:Reply-To": `${d.name} <${d.email}>`,
-    "o:tag": "contact-form",
-  });
-
-  const res = await fetch(`${base}/v3/${domain}/messages`, {
-    method: "POST",
-    headers: {
-      // Mailgun uses HTTP Basic with the literal username "api".
-      Authorization: `Basic ${Buffer.from(`api:${env("MAILGUN_API_KEY")}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: form,
-  });
-
-  if (!res.ok) {
-    throw new Error(`Mailgun responded ${res.status}: ${await res.text()}`);
-  }
-  return "mailgun";
-}
-
-async function sendViaSmtp(d: Payload) {
-  const host = env("SMTP_HOST")!;
-  const port = Number(env("SMTP_PORT") ?? 587);
-
-  // SMTP_SECURE, when set, wins. Otherwise infer: 465 is implicit TLS, while
-  // 587 and 25 open in plaintext and upgrade via STARTTLS. Mailtrap's live
-  // relay is 587 with SMTP_SECURE=false, which both routes agree on.
-  const secure =
-    env("SMTP_SECURE") !== undefined ? env("SMTP_SECURE") === "true" : port === 465;
-
-  const transport = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: env("SMTP_USER")
-      ? { user: env("SMTP_USER")!, pass: env("SMTP_PASS") ?? "" }
-      : undefined,
-  });
-
-  await transport.sendMail({
-    from: FROM,
-    to: TO,
-    replyTo: `${d.name} <${d.email}>`,
-    subject: `Website enquiry — ${d.name}`,
-    text: asText(d),
-    html: asHtml(d),
-  });
-  return "smtp";
-}
-
-async function sendViaResend(d: Payload) {
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env("RESEND_API_KEY")}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: env("CONTACT_FROM") ?? env("SMTP_FROM") ?? `${site.name} <onboarding@resend.dev>`,
-      to: [TO],
-      reply_to: `${d.name} <${d.email}>`,
-      subject: `Website enquiry — ${d.name}`,
-      text: asText(d),
-      html: asHtml(d),
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Resend responded ${res.status}: ${await res.text()}`);
-  }
-  return "resend";
-}
-
-async function sendViaFormspree(d: Payload) {
-  const res = await fetch(`https://formspree.io/f/${env("FORMSPREE_ID")}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ ...d, _replyto: d.email }),
-  });
-  if (!res.ok) throw new Error(`Formspree responded ${res.status}`);
-  return "formspree";
-}
-
-async function deliver(d: Payload) {
-  if (env("SMTP_HOST")) return sendViaSmtp(d);
-  if (env("MAILGUN_API_KEY")) return sendViaMailgun(d);
-  if (env("RESEND_API_KEY")) return sendViaResend(d);
-  if (env("FORMSPREE_ID")) return sendViaFormspree(d);
-
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "No delivery method configured " +
-        "(SMTP_HOST, MAILGUN_API_KEY, RESEND_API_KEY or FORMSPREE_ID)",
-    );
-  }
-  console.warn(
-    `[contact] No delivery configured — would have emailed ${TO}:\n${asText(d)}`,
-  );
-  return "logged";
 }
 
 export async function POST(request: Request) {
@@ -320,26 +119,26 @@ export async function POST(request: Request) {
   }
 
   try {
-    const delivery = await deliver(data);
+    const delivery = await sendMail({
+      subject: `Website enquiry — ${data.name}`,
+      text: asText(data),
+      html: asHtml(data),
+      replyTo: `${data.name} <${data.email}>`,
+    });
     return NextResponse.json({ ok: true, delivery });
   } catch (cause) {
     console.error("[contact] delivery failed", cause);
-    // 550/553 on MAIL FROM is the relay refusing the sender domain, which is
-    // a configuration problem rather than a transient one. Name the fix.
     const text = cause instanceof Error ? cause.message : String(cause);
     if (/\b(550|553)\b/.test(text) && /domain|sender|from/i.test(text)) {
       console.error(
         `[contact] the relay refused the sender "${FROM}". SMTP_FROM must be ` +
-          "an address on a domain verified with your provider — verified " +
-          "sending domains are separate from where mail is delivered, so the " +
-          "recipient does not need to match.",
+          "an address on a domain verified with your provider.",
       );
     }
     // Deliberately HTTP 200 with ok:false. A 5xx gets intercepted by
-    // Cloudflare, which swaps our JSON for its own "error code: 502" page —
-    // so the visitor saw a generic "try again" instead of being told to
-    // email us. The failure is reported in the body, which no CDN rewrites.
-    // The client keys off `ok`, not the status code.
+    // Cloudflare, which swaps our JSON for its own error page — so the visitor
+    // saw a generic "try again" instead of being told to email us. The client
+    // keys off `ok`, not the status code.
     return NextResponse.json({
       ok: false,
       error: `We could not send that. Please email ${TO} directly.`,

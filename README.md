@@ -95,6 +95,59 @@ Note that the "What areas do you cover?" FAQ in `src/lib/content.ts` still
 describes a service area in prose, since deleting it would leave the question
 unanswered. Rewrite or remove that entry if the area should not be stated.
 
+## Rental applications
+
+Each managed property gets its own application form at `/apply/<slug>`, with
+that property's address and terms filled in. `/apply` lists everything
+currently accepting applications.
+
+The form reproduces the paper original: two applicants, three prior addresses,
+present and last employment for each applicant, income, occupants, vehicles,
+pets, disclosures and two signatures.
+
+### Setup
+
+```bash
+mysql -u root -e "CREATE DATABASE cmngproperty CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+                  CREATE USER 'cmng'@'localhost' IDENTIFIED BY 'a-strong-password';
+                  GRANT ALL PRIVILEGES ON cmngproperty.* TO 'cmng'@'localhost';"
+
+# DB_* and APP_ENCRYPTION_KEY in .env.local — see .env.local.example
+openssl rand -base64 32          # value for APP_ENCRYPTION_KEY
+
+node scripts/migrate.mjs                                  # create the tables
+node scripts/create-admin.mjs "Your Name" you@example.com # prompts for a password
+```
+
+Then sign in at `/admin`, add a property, and its form is live immediately.
+
+### On submission
+
+The row is written **first**, then the email is attempted. If mail fails the
+application is still captured and `email_sent` stays 0 — the admin list flags
+those rows in red. Nothing an applicant typed is ever lost to a relay outage.
+
+### Sensitive data
+
+Social Security numbers are encrypted with AES-256-GCM under
+`APP_ENCRYPTION_KEY`, which lives outside the database. They are excluded from
+every ordinary query, never rendered into the admin page, and never included in
+the notification email — an admin has to click *Reveal*, which decrypts on
+demand and logs the access against their account.
+
+**Back up `APP_ENCRYPTION_KEY` somewhere other than the database it protects.**
+Losing it makes stored SSNs permanently unreadable.
+
+### Notes
+
+- Money is stored in cents throughout; floats cannot represent `2550.00`.
+- Applications snapshot the address, rent and fees at submission, because both
+  change and an application must show what the applicant agreed to.
+- Deleting a property with applications is blocked by a foreign key.
+  Deactivate it instead: existing records stay, new submissions stop.
+- Admin sessions store only a SHA-256 of the cookie token, so a database dump
+  cannot be replayed as a live session.
+
 ## Contact form
 
 The form posts to `POST /api/contact` (`src/app/api/contact/route.ts`), which
