@@ -107,19 +107,31 @@ pets, disclosures and two signatures.
 
 ### Setup
 
+On a fresh server, once:
+
 ```bash
-mysql -u root -e "CREATE DATABASE cmngproperty CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-                  CREATE USER 'cmng'@'localhost' IDENTIFIED BY 'a-strong-password';
-                  GRANT ALL PRIVILEGES ON cmngproperty.* TO 'cmng'@'localhost';"
-
-# DB_* and APP_ENCRYPTION_KEY in .env.local — see .env.local.example
-openssl rand -base64 32          # value for APP_ENCRYPTION_KEY
-
-node scripts/migrate.mjs                                  # create the tables
-node scripts/create-admin.mjs "Your Name" you@example.com # prompts for a password
+./release.sh setup
 ```
 
-Then sign in at `/admin`, add a property, and its form is live immediately.
+That creates the database and user, writes their credentials plus a generated
+`APP_ENCRYPTION_KEY` into `.env.local`, applies the schema, and creates an
+admin account whose password it prints once. Then sign in at `/admin`, add a
+property, and its form is live immediately.
+
+Every ordinary `./release.sh` after that runs `scripts/setup.mjs` without
+`--full`: it applies any new migrations and leaves everything else alone. New
+schema arrives with a deploy, the way foonhay's `db:push` step works.
+
+Everything is idempotent and nothing is ever overwritten — re-running is safe.
+`APP_ENCRYPTION_KEY` in particular is generate-once, because replacing it would
+make every stored SSN unreadable.
+
+To do it by hand instead:
+
+```bash
+node scripts/migrate.mjs                                  # schema only
+node scripts/create-admin.mjs "Your Name" you@example.com # prompts for a password
+```
 
 ### On submission
 

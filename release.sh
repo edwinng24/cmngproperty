@@ -14,6 +14,13 @@ DIR=/var/www/cmngproperty
 
 cd "$DIR"
 
+# `./release.sh setup` does the one-time bootstrap as well as a normal deploy.
+SETUP=""
+if [ "${1:-}" = "setup" ]; then
+  SETUP="--full"
+  echo "==> First-run setup: will create the database, user and admin if absent"
+fi
+
 echo "==> Pulling main"
 git pull origin main
 
@@ -27,21 +34,19 @@ npm ci --include=dev --no-audit --no-fund
 echo "==> Building"
 npm run build
 
-echo "==> Applying database migrations"
+echo "==> Applying configuration and database migrations"
 # After the build, before the restart. If the build fails we stop with the old
 # code running against the old schema, which is a consistent state; migrating
 # first would leave the database ahead of the code that is still serving.
 #
-# Migrations are additive and idempotent — the runner records what it has
-# applied and skips it next time, so re-running a deploy is a no-op here.
+# setup.mjs is idempotent: it generates APP_ENCRYPTION_KEY only if absent,
+# applies only migrations that have not run, and never touches an existing
+# value. On a server with no database it says so and carries on — the
+# marketing site does not need one, only /apply and /admin do.
 #
-# Skipped entirely when there is no database: the marketing site runs fine
-# without one, only /apply and /admin need it.
-if grep -qs '^DB_USER=..*' .env.local; then
-  node scripts/migrate.mjs
-else
-  echo "    no DB_USER in .env.local — skipping (applications will be unavailable)"
-fi
+# First deploy on a fresh box: run `./release.sh setup` instead, which also
+# creates the database, the user and an admin account.
+node scripts/setup.mjs $SETUP
 
 echo "==> Restarting"
 # --update-env so a changed .env.local is picked up. The || branch covers the
