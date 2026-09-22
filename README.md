@@ -242,6 +242,54 @@ Running it writes SVGs alongside the photographs; they are not referenced by
 any page, and using them again would mean re-adding `dangerouslyAllowSVG` to
 `next.config.ts`.
 
+## Backups
+
+`scripts/backup-cmng-db.sh` dumps the database **and** `.env.local`, encrypts
+the archive, and ships it to the Oracle box — the same shape as
+`backup-foonhay-db.sh`, with the same retention and directory conventions.
+
+```bash
+sudo cp scripts/backup-cmng-db.sh /usr/local/bin/backup-cmng-db.sh
+sudo install -m 600 /dev/null /etc/cmngproperty-backup.env
+sudo tee /etc/cmngproperty-backup.env >/dev/null <<'EOF'
+BACKUP_PASSPHRASE=<openssl rand -base64 24>
+ORACLE_HOST=144.24.30.249
+ORACLE_DIR=/home/ubuntu/backups/cmngproperty
+SSH_KEY=/root/.ssh/foonhay_backup_key
+KEEP_DAYS=7
+EOF
+
+sudo crontab -e     # 02:30 daily, an hour after foonhay's
+# 30 2 * * * /usr/local/bin/backup-cmng-db.sh >> /var/log/cmng-backup.log 2>&1
+```
+
+| | |
+|---|---|
+| `backup-cmng-db.sh` | dump, encrypt, transfer, prune both ends |
+| `--local` | skip the transfer |
+| `--verify FILE` | decrypt and check the archive is complete |
+| `--restore FILE` | restore, after typing the database name to confirm |
+
+### Why this one is encrypted and foonhay's is not
+
+The archive holds the database — applicants' names, dates of birth,
+employment, addresses and their SSNs as ciphertext — **and** `.env.local`,
+which holds `APP_ENCRYPTION_KEY`, the key that decrypts those SSNs.
+
+Shipping them together is right for disaster recovery; a database you cannot
+decrypt is not a backup. But it makes the archive as sensitive as both
+combined, so it is encrypted with AES-256 under `BACKUP_PASSPHRASE`, which is
+stored in neither of them.
+
+**Keep `BACKUP_PASSPHRASE` in a password manager** — not on this server, not on
+the Oracle box. Lose it and every archive is landfill.
+
+### Every backup verifies itself
+
+After writing an archive the script decrypts it, confirms all four tables are
+present and reports whether `APP_ENCRYPTION_KEY` came along. A backup that has
+never been read back is a hypothesis, not a backup.
+
 ## Deploying
 
 Any Next.js host works. Vercel is the least work:
