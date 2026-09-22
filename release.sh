@@ -27,6 +27,22 @@ npm ci --include=dev --no-audit --no-fund
 echo "==> Building"
 npm run build
 
+echo "==> Applying database migrations"
+# After the build, before the restart. If the build fails we stop with the old
+# code running against the old schema, which is a consistent state; migrating
+# first would leave the database ahead of the code that is still serving.
+#
+# Migrations are additive and idempotent — the runner records what it has
+# applied and skips it next time, so re-running a deploy is a no-op here.
+#
+# Skipped entirely when there is no database: the marketing site runs fine
+# without one, only /apply and /admin need it.
+if grep -qs '^DB_USER=..*' .env.local; then
+  node scripts/migrate.mjs
+else
+  echo "    no DB_USER in .env.local — skipping (applications will be unavailable)"
+fi
+
 echo "==> Restarting"
 # --update-env so a changed .env.local is picked up. The || branch covers the
 # very first deploy, when the process does not exist yet.
